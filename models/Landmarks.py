@@ -1,4 +1,5 @@
 import numpy as np
+import dlib
 
 def euclidean_distance(p1, p2):
     return np.linalg.norm(np.array(p1) - np.array(p2))
