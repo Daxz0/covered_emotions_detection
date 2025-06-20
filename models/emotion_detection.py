@@ -23,7 +23,7 @@ def detect_emotion(image):
 
     model = models.resnet50(pretrained=False)
     model.fc = nn.Linear(model.fc.in_features, 7)
-    model.load_state_dict(torch.load("trained_models/resnet50_fer2013.pth", map_location=device))  # Adjust path
+    model.load_state_dict(torch.load("trained_models/cnn_model.pth", map_location=device))  # Adjust path
     model.to(device)
     model.eval()
 

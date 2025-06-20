@@ -58,8 +58,6 @@ img, labels = parse_face(image)
 occlusions = detect_occlusion(labels)
 
 if valid_face == 1:
-    print("There is a valid face.")
-    
     img_rgb = np.array(img)
     img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
     annotated_image = img_bgr.copy()
@@ -94,9 +92,9 @@ if valid_face == 1:
         suggestion = "→ Too many obstructions, no emotion can be read"
 
     cv2.putText(blended, suggestion, (10, y_offset + 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                cv2.FONT_HERSHEY_COMPLEX_SMALL, 0.7, (255, 255, 0), 2)
 
-    cv2.imshow("Face Parsing + Emotion Analysis", blended)
+    cv2.imshow("Analysis", blended)
     cv2.waitKey(10000)
     cv2.destroyAllWindows()
 
