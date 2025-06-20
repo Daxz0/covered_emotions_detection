@@ -3,11 +3,16 @@ import pandas as pd
 import os
 import numpy as np
 
+from models.FaceDetection import detect_face
 
-def load_data(path: str):
-    loaded = np.load(path)
-    data = loaded['data']
-    labels = loaded['labels']
-    return data,labels
+
+
+input_path = "image.jpg"
+
+
+if detect_face(input_path):
     
-data,labels = load_data("datasets/emotions_dataset.npz")
+
+else:
+    print("No face was found in the image.")
+

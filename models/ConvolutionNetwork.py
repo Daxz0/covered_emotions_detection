@@ -5,20 +5,22 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import LabelEncoder
 import tensorflow.keras as keras
+from tensorflow.keras.optimizers import Adam, SGD
 from keras.models import Sequential
-from keras.layers import (
-    Dense, Conv2D, InputLayer, Activation, MaxPooling2D,
-    Dropout, Flatten
-)
+from keras.layers import Activation, MaxPooling2D, Dropout, Flatten, Reshape, Dense, Conv2D, GlobalAveragePooling2D
+from keras.applications.vgg16 import VGG16
+
 from keras.utils import to_categorical
 
 class ConvolutionNeuralNetwork:
 
-    def __init__(self, num_epochs=30, layers=2, dropout=0.5):
+    def __init__(self, num_epochs=30,batch_size = 16, layers=2, dropout=0.5):
         self.num_epochs = num_epochs
         self.layers = layers
         self.dropout = dropout
+        self.batch_size = batch_size
         self.label_encoder = LabelEncoder()
+        self.n_labels = 7
 
         self.label_path = os.path.join("trained_models", "CNN_LABEL_ENCODER.pkl")
         self.model_path = os.path.join("trained_models", "CNN_MODEL.keras")
@@ -32,26 +34,23 @@ class ConvolutionNeuralNetwork:
             self.train()
 
     def build_model(self):
-        model = Sequential()
+        vgg_expert = VGG16(weights = 'imagenet', include_top = False, input_shape = (64, 64, 3))
 
-        model.add(InputLayer(input_shape=(32, 32, 1)))
+        vgg_model = Sequential()
+        vgg_model.add(vgg_expert)
 
-        for _ in range(self.layers):
-            model.add(Conv2D(filters=32, kernel_size=(3, 3), padding='same'))
-            model.add(Activation('relu'))
-            model.add(MaxPooling2D(pool_size=(2, 2)))
-            model.add(Dropout(self.dropout))
-            
+        vgg_model.add(GlobalAveragePooling2D())
+        vgg_model.add(Dense(1024, activation = 'relu'))
+        vgg_model.add(Dropout(0.3))
+        vgg_model.add(Dense(512, activation = 'relu'))
+        vgg_model.add(Dropout(0.3))
+        vgg_model.add(Dense(self.n_labels, activation = 'sigmoid'))
+        
+        vgg_model.compile(loss = 'categorical_crossentropy',
+          optimizer = SGD(learning_rate=0.001, momentum=0.95),
+          metrics=['accuracy'])
 
-
-        model.add(Flatten())
-        model.add(Dense(128, activation='relu'))
-        model.add(Dropout(self.dropout))
-        model.add(Dense(7, activation='softmax'))
-
-        opt = keras.optimizers.Adam(learning_rate=0.001)
-        model.compile(loss='categorical_crossentropy', optimizer=opt, metrics=['accuracy'])
-        return model
+        return vgg_model
 
     def load_data(self, path: str):
         loaded = np.load(path)
@@ -59,20 +58,37 @@ class ConvolutionNeuralNetwork:
         labels = loaded['labels']
         return data, labels
 
-    def load_and_preprocess(self):
-        data, labels = self.load_data("datasets/emotions_dataset_32_32.npz")
+    # def load_and_preprocess(self):
+    #     data, labels = self.load_data("datasets/emotions_dataset_64_64.npz")
 
-        data = data.reshape((-1, 32, 32, 1))
+    #     data = data.reshape((-1, 64, 64, 1))
+
+    #     X_train, X_test, y_train, y_test = train_test_split(data, labels, test_size=0.3, random_state=42)
+
+    #     y_train_encoded = self.label_encoder.fit_transform(y_train)
+    #     y_test_encoded = self.label_encoder.transform(y_test)
+
+    #     y_train_onehot = to_categorical(y_train_encoded)
+    #     y_test_onehot = to_categorical(y_test_encoded)
+
+    #     return X_train, X_test, y_train_encoded, y_test_encoded, y_train_onehot, y_test_onehot
+    
+    def load_and_preprocess(self):
+        data, labels = self.load_data("datasets/emotions_dataset_64_64.npz")
+
+        data = data.reshape((-1, 64, 64, 1))
+        data = np.repeat(data, 3, axis=-1)  # simulate RGB
 
         X_train, X_test, y_train, y_test = train_test_split(data, labels, test_size=0.3, random_state=42)
 
         y_train_encoded = self.label_encoder.fit_transform(y_train)
         y_test_encoded = self.label_encoder.transform(y_test)
 
-        y_train_onehot = to_categorical(y_train_encoded)
-        y_test_onehot = to_categorical(y_test_encoded)
+        y_train_onehot = to_categorical(y_train_encoded, num_classes=self.n_labels)
+        y_test_onehot = to_categorical(y_test_encoded, num_classes=self.n_labels)
 
         return X_train, X_test, y_train_encoded, y_test_encoded, y_train_onehot, y_test_onehot
+
 
     def train(self):
         X_train, X_test, y_train_encoded, y_test_encoded, y_train_onehot, y_test_onehot = self.load_and_preprocess()
@@ -82,14 +98,16 @@ class ConvolutionNeuralNetwork:
             y_train_onehot,
             validation_data=(X_test, y_test_onehot),
             epochs=self.num_epochs,
-            batch_size=32,
-            verbose=2
+            batch_size=self.batch_size,
+            verbose=1,
+            shuffle=True
         )
 
         accuracy = self.score(X_test, y_test_encoded)
         print(f"Test Accuracy: {accuracy:.4f}")
         self.save()
         return accuracy
+
 
     def save(self, model_path=None, label_path=None):
         model_path = model_path or self.model_path
@@ -104,11 +122,11 @@ class ConvolutionNeuralNetwork:
         self.label_encoder = joblib.load(label_path)
 
     def predict(self, X):
-        X = X.astype('float32') / 255.0
-        if len(X.shape) == 3:  # single image, no batch dim
+        X = X.astype('float64') / 255.0
+        if len(X.shape) == 3:
             X = np.expand_dims(X, axis=0)
-        if X.shape[-1] != 1:  # ensure single channel
-            X = X.reshape((-1, 32, 32, 1))
+        if X.shape[-1] != 1:
+            X = X.reshape((-1, 64, 64, 1))
         return self.model.predict(X)
 
     def score(self, X, y_true_encoded):
@@ -116,9 +134,10 @@ class ConvolutionNeuralNetwork:
         y_pred_labels = np.argmax(y_pred_probs, axis=1)
         return accuracy_score(y_true_encoded, y_pred_labels)
 
+
     def predict_label(self, image_array):
-        image_array = image_array.astype('float32') / 255.0
-        image_array = image_array.reshape((1, 32, 32, 1))
+        image_array = image_array.astype('float64') / 255.0
+        image_array = image_array.reshape((1, 64, 64, 1))
         probs = self.model.predict(image_array)
         pred_index = np.argmax(probs, axis=1)[0]
         return self.label_encoder.inverse_transform([pred_index])[0]
