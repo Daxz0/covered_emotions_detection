@@ -10,17 +10,21 @@ processor = SegformerImageProcessor.from_pretrained("jonathandinu/face-parsing")
 model = SegformerForSemanticSegmentation.from_pretrained("jonathandinu/face-parsing")
 model.eval()  # inference mode
 
-def parse_face(image_path):
-    img = Image.open(image_path).convert("RGB")
+def parse_face(cv2_image):
+    rgb_image = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB)
+    img = Image.fromarray(rgb_image)
+    
     inputs = processor(images=img, return_tensors="pt")
     with torch.no_grad():
         outputs = model(**inputs)
+    
     logits = outputs.logits
     up_logit = torch.nn.functional.interpolate(
         logits, size=img.size[::-1], mode="bilinear", align_corners=False
     )
     labels = up_logit.argmax(dim=1)[0].cpu().numpy()
     return img, labels
+
 
 def visualize_parsing(img, labels):
     # Label map from model (0=bg,1=skin,2=nose,3=eyeglasses,4=left_eye,...)
@@ -44,14 +48,3 @@ def detect_occlusion(labels):
         "mouth_visible": has_mouth
     }
     return occlusions
-
-image_path = "image.jpg"  # replace with your file
-
-img, labels = parse_face(image_path)
-visualize_parsing(img, labels)
-occl = detect_occlusion(labels)
-
-print("Occlusion Results:")
-print(f"- Sunglasses detected: {'Yes' if occl['sunglasses'] else 'No'}")
-print(f"- Nose visible: {'Yes' if occl['nose_visible'] else 'No'}")
-print(f"- Mouth visible: {'Yes' if occl['mouth_visible'] else 'No'}")

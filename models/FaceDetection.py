@@ -4,7 +4,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 
-def detect_face(image_path: str) -> int:
+def detect_face(image) -> int:
     
     """
     Detects faces in an image and draws rectangles around them.
@@ -16,7 +16,7 @@ def detect_face(image_path: str) -> int:
     """
     detector = dlib.get_frontal_face_detector() # type: ignore
 
-    image = cv2.imread(image_path)
+    # image = cv2.imread(image_path)
 
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
