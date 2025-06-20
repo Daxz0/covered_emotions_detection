@@ -34,7 +34,7 @@ def detect_emotion(image):
         transforms.Normalize([0.5]*3, [0.5]*3)
     ])
 
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml") # type: ignore
 
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)

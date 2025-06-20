@@ -1,50 +1,73 @@
-import cv2
 import numpy as np
-import torch
-from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
-from PIL import Image
-import matplotlib.pyplot as plt
 
-# Load pretrained face parsing model
-processor = SegformerImageProcessor.from_pretrained("jonathandinu/face-parsing")
-model = SegformerForSemanticSegmentation.from_pretrained("jonathandinu/face-parsing")
-model.eval()  # inference mode
-
-def parse_face(cv2_image):
-    rgb_image = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB)
-    img = Image.fromarray(rgb_image)
-    
-    inputs = processor(images=img, return_tensors="pt")
-    with torch.no_grad():
-        outputs = model(**inputs)
-    
-    logits = outputs.logits
-    up_logit = torch.nn.functional.interpolate(
-        logits, size=img.size[::-1], mode="bilinear", align_corners=False
-    )
-    labels = up_logit.argmax(dim=1)[0].cpu().numpy()
-    return img, labels
+def euclidean_distance(p1, p2):
+    return np.linalg.norm(np.array(p1) - np.array(p2))
 
 
-def visualize_parsing(img, labels):
-    # Label map from model (0=bg,1=skin,2=nose,3=eyeglasses,4=left_eye,...)
-    cmap = plt.cm.get_cmap('tab20', np.max(labels)+1)
-    plt.figure(figsize=(7,7))
-    plt.imshow(img)
-    plt.imshow(labels, alpha=0.6, cmap=cmap)
-    plt.axis('off')
-    plt.show()
+def guess_emotion_from_eyes(eye_landmarks):
+    """
+    Guess emotion based on eye openness and shape.
+    eye_landmarks: List of 12 tuples (6 for each eye)
+    """
+    left_eye = eye_landmarks[:6]
+    right_eye = eye_landmarks[6:]
 
-def detect_occlusion(labels):
-    # If eyeglasses (label 3) present
-    has_glasses = (labels == 3).any()
-    # If nose/mouth area missing (mask)
-    has_nose = (labels == 2).any()
-    has_mouth = (labels == 10).any()
-    
-    occlusions = {
-        "sunglasses": has_glasses,
-        "nose_visible": has_nose,
-        "mouth_visible": has_mouth
-    }
-    return occlusions
+    def eye_openness(eye):
+        return euclidean_distance(eye[1], eye[5]) + euclidean_distance(eye[2], eye[4])
+
+    left_openness = eye_openness(left_eye)
+    right_openness = eye_openness(right_eye)
+
+    avg_openness = (left_openness + right_openness) / 2.0
+
+    if avg_openness > 15:
+        return "Surprised"
+    elif avg_openness < 6:
+        return "Sleepy or Angry"
+    else:
+        return "Neutral or Focused"
+
+
+def guess_emotion_from_mouth(mouth_landmarks):
+    """
+    Guess emotion based on mouth shape and openness.
+    mouth_landmarks: List of 20 tuples (outer + inner lips)
+    """
+    outer_lips = mouth_landmarks[:12]
+    inner_lips = mouth_landmarks[12:]
+
+    horizontal = euclidean_distance(outer_lips[0], outer_lips[6])  # corner to corner
+    vertical = euclidean_distance(outer_lips[3], outer_lips[9])    # top to bottom
+
+    openness_ratio = vertical / horizontal if horizontal > 0 else 0
+
+    if openness_ratio > 0.35:
+        return "Surprised or Laughing"
+    elif openness_ratio < 0.15:
+        return "Neutral or Sad"
+    else:
+        # Check mouth curvature
+        if outer_lips[6][1] < outer_lips[0][1]:
+            return "Happy"
+        else:
+            return "Neutral or Sad"
+
+
+def obstructed_detection(face_landmarks, obstruction_type):
+    """
+    face_landmarks: dlib shape object or list of 68 (x, y) tuples
+    obstruction_type: 'eyes', 'mouth', or 'none'
+    """
+    if isinstance(face_landmarks, dlib.full_object_detection):
+        coords = [(p.x, p.y) for p in face_landmarks.parts()]
+    else:
+        coords = face_landmarks
+
+    if obstruction_type == 'eyes':
+        mouth = coords[48:68]
+        return guess_emotion_from_mouth(mouth)
+    elif obstruction_type == 'mouth':
+        eyes = coords[36:48]
+        return guess_emotion_from_eyes(eyes)
+    else:
+        return "Use full-face emotion model"
