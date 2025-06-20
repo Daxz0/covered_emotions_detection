@@ -10,21 +10,21 @@ from torchvision import models, transforms
 import matplotlib.pyplot as plt
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 
-# ====== Setup ======
+# ====== Label Maps ======
 emotion_map = {
     0: "Angry", 1: "Disgust", 2: "Fear", 3: "Happy",
     4: "Sad", 5: "Surprise", 6: "Neutral"
 }
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Load emotion model
+# ====== Load Emotion Model ======
 model = models.resnet50(pretrained=False)
 model.fc = nn.Linear(model.fc.in_features, 7)
 model.load_state_dict(torch.load("trained_models/resnet50_fer2013.pth", map_location=device))
 model.to(device)
 model.eval()
 
-# Load face detector & landmark model
+# ====== Face + Landmark Detection ======
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 dlib_detector = dlib.get_frontal_face_detector()
 shape_path = 'shape_predictor_68_face_landmarks.dat'
@@ -34,12 +34,12 @@ if not os.path.exists(shape_path):
     urllib.request.urlretrieve(url, shape_path)
 landmark_predictor = dlib.shape_predictor(shape_path)
 
-# Load face parser model
+# ====== Load Face Parser ======
 processor = SegformerImageProcessor.from_pretrained("jonathandinu/face-parsing")
 parser_model = SegformerForSemanticSegmentation.from_pretrained("jonathandinu/face-parsing")
 parser_model.eval()
 
-# Preprocess for emotion model
+# ====== Emotion Input Transform ======
 transform = transforms.Compose([
     transforms.Grayscale(num_output_channels=3),
     transforms.Resize((224, 224)),
@@ -47,7 +47,36 @@ transform = transforms.Compose([
     transforms.Normalize([0.5]*3, [0.5]*3)
 ])
 
-# ====== Take Picture ======
+# ====== Helper: Crop to Center Square ======
+def crop_to_square_full_face(img, box, padding_ratio=0.3):
+    x, y, w, h = box
+    cx, cy = x + w // 2, y + h // 2
+    face_size = int(max(w, h) * (1 + padding_ratio))  # Add padding
+    half_size = face_size // 2
+
+    # Calculate square bounds
+    start_x = max(cx - half_size, 0)
+    start_y = max(cy - half_size, 0)
+    end_x = min(cx + half_size, img.shape[1])
+    end_y = min(cy + half_size, img.shape[0])
+
+    # Ensure output is square
+    cropped = img[start_y:end_y, start_x:end_x]
+
+    # If not square due to edge cuts, pad it
+    h_diff = face_size - (end_y - start_y)
+    w_diff = face_size - (end_x - start_x)
+    top, bottom = h_diff // 2, h_diff - h_diff // 2
+    left, right = w_diff // 2, w_diff - w_diff // 2
+
+    padded = cv2.copyMakeBorder(
+        cropped, top, bottom, left, right,
+        borderType=cv2.BORDER_CONSTANT, value=[0, 0, 0]
+    )
+    return padded
+
+
+# ====== Webcam Capture ======
 cap = cv2.VideoCapture(0)
 print("[INFO] Press SPACE to capture image or ESC to quit.")
 while True:
@@ -65,18 +94,6 @@ while True:
         break
 cap.release()
 cv2.destroyAllWindows()
-
-# ====== Helper: Square Crop ======
-def crop_to_square(img, box):
-    x, y, w, h = box
-    center_x, center_y = x + w // 2, y + h // 2
-    max_side = max(w, h)
-    half = max_side // 2
-    start_x = max(center_x - half, 0)
-    start_y = max(center_y - half, 0)
-    end_x = min(start_x + max_side, img.shape[1])
-    end_y = min(start_y + max_side, img.shape[0])
-    return img[start_y:end_y, start_x:end_x]
 
 # ====== Face Detection ======
 face_img = captured_img.copy()
@@ -98,7 +115,7 @@ if len(dlib_faces) > 0:
         cv2.circle(landmark_img, (lx, ly), 4, (255, 0, 0), -1)
 
 # ====== Emotion Prediction ======
-face_crop = crop_to_square(captured_img, (x, y, w, h))
+face_crop = crop_to_square_full_face(captured_img, (x, y, w, h))
 face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
 pil_face = Image.fromarray(face_rgb)
 
@@ -109,7 +126,7 @@ with torch.no_grad():
     emotion = emotion_map[pred_class]
     confidence = F.softmax(output, dim=1)[0][pred_class].item() * 100
 
-# Annotate result
+# Annotate emotion
 prediction_img = face_crop.copy()
 cv2.putText(prediction_img, f"{emotion} ({confidence:.1f}%)", (10, 30),
             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
@@ -136,51 +153,50 @@ def detect_occlusion(labels):
     has_glasses = (labels == 3).any()
     has_nose = (labels == 2).any()
     has_mouth = (labels == 10).any()
+    has_mask = not has_nose and not has_mouth
+    emotion_valid = has_nose and has_mouth
     return {
         "sunglasses": has_glasses,
-        "nose_visible": has_nose,
-        "mouth_visible": has_mouth
+        "mask": has_mask,
+        "emotion_valid": emotion_valid
     }
 
 parsed_pil, parsed_labels = parse_face(face_crop)
 parsed_img = apply_overlay(parsed_pil, parsed_labels)
 occlusion = detect_occlusion(parsed_labels)
 
-# ====== Resize to Same Size ======
-target_size = (400, 400)
-face_disp = cv2.resize(face_img, target_size)
-land_disp = cv2.resize(landmark_img, target_size)
-pred_disp = cv2.resize(prediction_img, target_size)
-pars_disp = cv2.resize(parsed_img, target_size)
+# ====== Annotate Parsing Image ======
+overlay_label = f"Glasses: {'Yes' if occlusion['sunglasses'] else 'No'} | "
+overlay_label += f"Mask: {'Yes' if occlusion['mask'] else 'No'} | "
+overlay_label += f"Emotion: {'Valid' if occlusion['emotion_valid'] else 'Unreliable'}"
+cv2.putText(parsed_img, overlay_label, (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-# ====== Label Occlusion ======
-occlusion_text = f"Glasses: {'Yes' if occlusion['sunglasses'] else 'No'} | "
-if not occlusion["nose_visible"] or not occlusion["mouth_visible"]:
-    occlusion_text += "Emotion: Unreliable"
-else:
-    occlusion_text += "Emotion: Valid"
-cv2.putText(pars_disp, occlusion_text, (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+# ====== Crop All to Square for Display ======
+face_disp = crop_to_square_full_face(face_img, (x, y, w, h))
+land_disp = crop_to_square_full_face(landmark_img, (x, y, w, h))
+pred_disp = prediction_img
+pars_disp = parsed_img
 
 # ====== Display All ======
 fig, axs = plt.subplots(1, 4, figsize=(22, 6))
-fig.suptitle("Face Detection | Landmarks | Emotion | Face Parsing + Occlusion", fontsize=15)
+fig.suptitle("Face Detection | Landmarks | Emotion | Parsing + Occlusion", fontsize=15)
 
 axs[0].imshow(cv2.cvtColor(face_disp, cv2.COLOR_BGR2RGB))
-axs[0].set_title("Face Detected")
+axs[0].set_title("Face")
 axs[0].axis('off')
 
 axs[1].imshow(cv2.cvtColor(land_disp, cv2.COLOR_BGR2RGB))
 axs[1].set_title("Landmarks")
 axs[1].axis('off')
 
+axs[3].imshow(pars_disp)
+axs[3].set_title("Parsing + Occlusion")
+axs[3].axis('off')
+
 axs[2].imshow(cv2.cvtColor(pred_disp, cv2.COLOR_BGR2RGB))
 axs[2].set_title(f"Emotion: {emotion} ({confidence:.1f}%)")
 axs[2].axis('off')
-
-axs[3].imshow(pars_disp)
-axs[3].set_title("Face Parsing & Occlusion")
-axs[3].axis('off')
 
 plt.tight_layout()
 plt.show()
